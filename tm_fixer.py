@@ -6,7 +6,10 @@ han_zen = '[A-Za-z0-9:?!|%$#\)][ぁ-んァ-ンー-龥]'
 zen_han = '[ぁ-んァ-ンー-龥][A-Za-z0-9?!%$#|\(]'
 hankaku = '[A-Za-z0-9!?@#$%^*:]'
 jp_char = '[あ-んア-ンー-龥]'
-zenkaku_non_jp_chars = '[Ａ-Ｚａ-ｚ０-９：！？＋＊＆＾％＄＃＠”；＞＜／｛｝［］　]'
+zenkaku_non_jp_chars = '[Ａ-Ｚａ-ｚ０-９：！？＋＊＾％＄＃＠；／｛｝［］（）　]'
+
+zenkaku_special = {'＞':'&gt;', '＜':'&lt;', '＆':'&amp;', "’":'&apos;', '”':'&quot;'}
+
 jp_parenthesis = '[「」『』]'
 
 def if_jp_seg(line):
@@ -45,9 +48,6 @@ def check_tag_space(line, ids):
                 new_list.append(item[:-1] + ' ' + item[-1])
         
         return new_list
-    
-
-   
     
     opentag_space_issues = []
     closetag_space_issues = []
@@ -93,13 +93,30 @@ def check_tag_space(line, ids):
 
     return line
 
-
 def if_byte_issues(line):
     return bool(re.search(zenkaku_non_jp_chars, line))
 
 def fix_byte_issues(line):
     return jaconv.z2h(line, ascii=True, kana=False, digit=True)
     #returns fixed whole chars to regular ones
+    
+def get_zenkaku_special_issues(line):
+    issue_list = []
+    for key in zenkaku_special.keys():
+        if key in line:
+            issue_list.append(key)
+    
+    if len(issue_list) != 0:
+        return issue_list
+    else:
+        return False
+
+
+def fix_zenkaku_special(line, issue_list):
+    for item in issue_list:
+        line = line.replace(item, zenkaku_special[item])
+    return line
+
 
 def if_jp_parenthesis(line):
     return bool(re.search(jp_parenthesis, line))
@@ -118,14 +135,24 @@ def check_lang(line):
         lang = "ja"
     return lang
 
-def if_link(line):
-    return '"type":"link"' in line
+def if_link(mdata_dict):
+    for a_dict in mdata_dict:
+        if a_dict['type'] == 'link':
+            return True
+    return False
 
 def get_link_ids(linkdata):
     ids = []
-    for link in formatted_linkdata:
+    for link in linkdata:
         if link['type'] == "link":
             ids.append(link['id'])
+    return ids
+
+def get_tag_ids(linkdata, tag):
+    ids = []
+    for a_dict in linkdata:
+        if a_dict['type'] == tag:
+            ids.append(a_dict['id'])
     return ids
 
 def mistranslate_dict(mistranslate): #create a dict from mistranslation list file, {'right':'wrong'} format
@@ -179,7 +206,7 @@ def fix_cho_on(line, cho_on_list):
             line = line.replace(list_item, list_item[:-1] + "ー" + list_item[-1])
     return line
 
-with open('fuse.tmx', 'r') as input, open('output.tmx', 'a+') as output, open('cho_on.txt', 'r') as cho_on, open('mistranslation.txt', 'r') as mistranslate:
+with open('HT_NEW.tmx', 'r') as input, open('output_ht.tmx', 'a+') as output, open('cho_on.txt', 'r') as cho_on, open('mistranslation.txt', 'r') as mistranslate:
     segment_id = 0
     mod_segment_list = []
 
@@ -189,6 +216,7 @@ with open('fuse.tmx', 'r') as input, open('output.tmx', 'a+') as output, open('c
     
     elements = []
     link_exist = False
+    literal_exist = False
     lang = "en-us"
 
     for line in input:
@@ -200,14 +228,24 @@ with open('fuse.tmx', 'r') as input, open('output.tmx', 'a+') as output, open('c
         if '<tuv xml:lang="en-us"' in line:
             lang = "en-us"
             link_exist = False
+            literal_exist = False
             
 
         if lang == "ja" and '<prop type="mdata">' in line:
-            if if_link(line):
-                link_data = re.search('<prop type=\"mdata\">(.*?)<\/prop>', line).group(1)
-                #print(link_data, file=output)
-                formatted_linkdata = json.loads(link_data)
-                ids = get_link_ids(formatted_linkdata) #get list of ids which is for link
+            mdata = re.search('<prop type=\"mdata\">(.*?)<\/prop>', line).group(1)
+            #print(link_data, file=output)
+            formatted_linkdata = json.loads(mdata)
+            #print(formatted_linkdata)
+
+            literal_ids = get_tag_ids(formatted_linkdata, "literal") #get list of ids which is for link
+            link_ids = get_tag_ids(formatted_linkdata, "link")
+            #print("literal:", literal_ids)
+            #print("link:", link_ids)
+            
+            #print(ids, segment_id)
+            if literal_ids:
+                literal_exist = True
+            if link_ids:
                 link_exist = True
 
         if "<seg>" not in line:
@@ -227,12 +265,33 @@ with open('fuse.tmx', 'r') as input, open('output.tmx', 'a+') as output, open('c
                 if if_jp_parenthesis(line):
                     line = del_jp_parenthesis(line)
 
+
+                #dm = '<seg>あああ<bpt i="1" x="1"/>インフラストラクチャFuse ＆ Online をインスト＜ールす＞る”前に’デフォルトのカスタムリソースファイルを編集<ept i="1"/>を参照してください。</seg>'
+                zenkaku_special_issues = get_zenkaku_special_issues(line)
+                #print(zenkaku_special_issues)
+                if zenkaku_special_issues:
+                    line = fix_zenkaku_special(line, zenkaku_special_issues)
+
+
+
+
+                ## fix space for tags
                 if link_exist:
-                    #print(lang)
-                    stag_space_issues = check_tag_space(line, ids)
-                    if stag_space_issues:
-                        #print(stag_space_issues)
-                        line = stag_space_issues
+                    link_space_issues = check_tag_space(line, link_ids)
+                    #print(link_space_issues)
+                else:
+                    link_space_issues = False
+                #print(link_space_issues)
+                if literal_exist:
+                    literal_space_issues = check_tag_space(line, literal_ids)
+                else:
+                    literal_space_issues = False
+
+                if link_space_issues:
+                    line = link_space_issues
+
+                if literal_space_issues:
+                    line = literal_space_issues
 
                 if if_byte_issues(line):
                     line = fix_byte_issues(line)
@@ -262,25 +321,25 @@ with open('fuse.tmx', 'r') as input, open('output.tmx', 'a+') as output, open('c
                     print(line, file=output, end='')
             
     
-time = '_fxr{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
-id_open_tag = '<prop type="modified_by">'
-id_close_tag = '</prop>'
-#print(mod_segment_list)
-with open("output.tmx", 'r') as read_output, open('output_mod_id.tmx', 'a+') as mod_output:
-    mod_segment_list.sort()
-    current_seg = 0
-    for line in read_output:
-        if '<tuv xml:lang="ja"' in line:
-            current_seg += 1
-            print(line, file=mod_output, end='')
+# time = '_fxr{:%Y-%m-%d %H:%M:%S}'.format(datetime.datetime.now())
+# id_open_tag = '<prop type="modified_by">'
+# id_close_tag = '</prop>'
+# #print(mod_segment_list)
+# with open("output.tmx", 'r') as read_output, open('output_mod_id.tmx', 'a+') as mod_output:
+#     mod_segment_list.sort()
+#     current_seg = 0
+#     for line in read_output:
+#         if '<tuv xml:lang="ja"' in line:
+#             current_seg += 1
+#             print(line, file=mod_output, end='')
         
-        elif current_seg in mod_segment_list and id_open_tag in line:
-            end_tag_idx = re.search(id_close_tag, line)
-            end_tag_idx = end_tag_idx.start()
-            line = line[:end_tag_idx] + time + id_close_tag
-            print(line, file=mod_output)
-        else:
-            print(line, file=mod_output, end='')
+#         elif current_seg in mod_segment_list and id_open_tag in line:
+#             end_tag_idx = re.search(id_close_tag, line)
+#             end_tag_idx = end_tag_idx.start()
+#             line = line[:end_tag_idx] + time + id_close_tag
+#             print(line, file=mod_output)
+#         else:
+#             print(line, file=mod_output, end='')
   
 
             
